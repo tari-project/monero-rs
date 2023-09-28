@@ -1,5 +1,5 @@
 // Rust Monero Library
-// Written in 2019-2022 by
+// Written in 2019-2023 by
 //   Monero Rust Contributors
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -90,4 +90,4 @@ pub use util::key::KeyPair;
 pub use util::key::PrivateKey;
 pub use util::key::PublicKey;
 pub use util::key::ViewPair;
-pub use util::Error;
+pub use util::GeneralError;

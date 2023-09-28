@@ -1,5 +1,5 @@
 // Rust Monero Library
-// Written in 2019-2022 by
+// Written in 2019-2023 by
 //   Monero Rust Contributors
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -22,8 +22,8 @@ use crate::util::address::AddressType;
 use thiserror::Error;
 
 /// Potential errors encountered while manipulating Monero networks.
-#[derive(Error, Debug, PartialEq, Eq)]
-pub enum Error {
+#[derive(Error, Debug, PartialEq)]
+pub enum NetworkError {
     /// Invalid magic network byte.
     #[error("Invalid magic network byte")]
     InvalidMagicByte,
@@ -33,9 +33,10 @@ pub enum Error {
 ///
 /// Network implements [`Default`] and returns [`Network::Mainnet`].
 ///
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Default, Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Network {
     /// Mainnet is the "production" network and blockchain.
+    #[default]
     Mainnet,
     /// Stagenet is technically equivalent to mainnet, both in terms of features and consensus
     /// rules.
@@ -74,19 +75,13 @@ impl Network {
     /// Recover the network type given an address magic byte.
     ///
     /// **Source:** [`monero/src/cryptonote_config.h`](https://github.com/monero-project/monero/blob/159c78758af0a0af9df9a4f9ab81888f9322e9be/src/cryptonote_config.h#L190-L239)
-    pub fn from_u8(byte: u8) -> Result<Network, Error> {
+    pub fn from_u8(byte: u8) -> Result<Network, NetworkError> {
         use Network::*;
         match byte {
             18 | 19 | 42 => Ok(Mainnet),
             53 | 54 | 63 => Ok(Testnet),
             24 | 25 | 36 => Ok(Stagenet),
-            _ => Err(Error::InvalidMagicByte),
+            _ => Err(NetworkError::InvalidMagicByte),
         }
-    }
-}
-
-impl Default for Network {
-    fn default() -> Network {
-        Network::Mainnet
     }
 }

@@ -1,5 +1,5 @@
 // Rust Monero Library
-// Written in 2019-2022 by
+// Written in 2019-2023 by
 //   Monero Rust Contributors
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -20,34 +20,42 @@
 //! [`Transaction`]: crate::blockdata::transaction::Transaction
 //!
 
-use std::{fmt, io};
-
-use crate::consensus::encode::{self, serialize, Decodable, Encodable, VarInt};
+use crate::consensus::encode::{
+    self, consensus_decode_sized_vec, serialize, Decodable, Encodable, VarInt,
+};
 use crate::cryptonote::hash;
 use crate::cryptonote::onetime_key::KeyGenerator;
-use crate::util::amount::{self, Amount};
+use crate::util::amount::Amount;
 use crate::util::key::H;
 use crate::{PublicKey, ViewPair};
+use std::array::TryFromSliceError;
+use std::{fmt, io};
 
-#[cfg(feature = "serde")]
-use serde_big_array::BigArray;
-#[cfg(feature = "serde")]
-use serde_crate::{Deserialize, Serialize};
-
+use crate::cryptonote::hash::HashError;
+use crate::util::address::AddressError;
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use sealed::sealed;
+#[cfg(feature = "serde")]
+use serde_big_array::BigArray;
+#[cfg(feature = "serde")]
+use serde_crate::{Deserialize, Serialize};
+use std::convert::TryInto;
 use thiserror::Error;
 
-use std::convert::TryInto;
-
 /// Ring Confidential Transaction potential errors.
-#[derive(Error, Debug, PartialEq, Eq)]
-pub enum Error {
+#[derive(Error, Debug, PartialEq)]
+pub enum RingCtError {
     /// Invalid RingCt type.
     #[error("Unknown RingCt type")]
     UnknownRctType,
+    /// Network error.
+    #[error("Address error: {0}")]
+    AddressError(#[from] AddressError),
+    /// Conversion error.
+    #[error("Conversion error: {0}")]
+    Conversion(String),
 }
 
 // ====================================================================
@@ -102,7 +110,7 @@ impl From<[Key; 64]> for Key64 {
 }
 
 impl Decodable for Key64 {
-    fn consensus_decode<R: io::Read + ?Sized>(r: &mut R) -> Result<Key64, encode::Error> {
+    fn consensus_decode<R: io::Read + ?Sized>(r: &mut R) -> Result<Key64, encode::EncodeError> {
         let mut key64 = Key64::new();
         for i in 0..64 {
             let key: Key = Decodable::consensus_decode(r)?;
@@ -207,8 +215,8 @@ impl EcdhInfo {
         tx_pubkey: &PublicKey,
         index: usize,
         candidate_commitment: &EdwardsPoint,
-    ) -> Option<Opening> {
-        let shared_key = KeyGenerator::from_key(view_pair, *tx_pubkey).get_rvn_scalar(index);
+    ) -> Result<Option<Opening>, RingCtError> {
+        let shared_key = KeyGenerator::from_key(view_pair, *tx_pubkey).get_rvn_scalar(index)?;
 
         let (amount, blinding_factor) = match self {
             // ecdhDecode in rctOps.cpp else
@@ -223,7 +231,7 @@ impl EcdhInfo {
                 // get first 64 bits (d2b in rctTypes.cpp)
                 let amount_significant_bytes = amount_scalar.to_bytes()[0..8]
                     .try_into()
-                    .expect("Can't fail");
+                    .map_err(|e: TryFromSliceError| RingCtError::Conversion(e.to_string()))?;
                 let amount = u64::from_le_bytes(amount_significant_bytes);
                 (amount, mask_scalar)
             }
@@ -238,18 +246,21 @@ impl EcdhInfo {
 
         let amount_scalar = Scalar::from(amount);
 
-        let expected_commitment = ED25519_BASEPOINT_POINT * blinding_factor
-            + H.point.decompress().unwrap() * amount_scalar;
+        let expected_commitment = if let Some(h_point) = H.point.decompress() {
+            ED25519_BASEPOINT_POINT * blinding_factor + h_point * amount_scalar
+        } else {
+            return Ok(None);
+        };
 
         if &expected_commitment != candidate_commitment {
-            return None;
+            return Ok(None);
         }
 
-        Some(Opening {
+        Ok(Some(Opening {
             amount: Amount::from_pico(amount),
             blinding_factor,
             commitment: expected_commitment,
-        })
+        }))
     }
 }
 
@@ -311,7 +322,7 @@ impl EcdhInfo {
     fn consensus_decode<R: io::Read + ?Sized>(
         r: &mut R,
         rct_type: RctType,
-    ) -> Result<EcdhInfo, encode::Error> {
+    ) -> Result<EcdhInfo, encode::EncodeError> {
         match rct_type {
             RctType::Full | RctType::Simple | RctType::Bulletproof | RctType::Null => {
                 Ok(EcdhInfo::Standard {
@@ -496,7 +507,7 @@ pub struct RctSigBase {
     /// The RingCt type of signatures.
     pub rct_type: RctType,
     /// Transaction fee.
-    #[cfg_attr(feature = "serde", serde(with = "amount::serde::as_pico"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::util::amount::serde::as_pico"))]
     pub txn_fee: Amount,
     /// Pseudo outs key vector.
     pub pseudo_outs: Vec<Key>,
@@ -529,7 +540,7 @@ impl RctSigBase {
         r: &mut R,
         inputs: usize,
         outputs: usize,
-    ) -> Result<Option<RctSigBase>, encode::Error> {
+    ) -> Result<Option<RctSigBase>, encode::EncodeError> {
         let rct_type: RctType = Decodable::consensus_decode(r)?;
         match rct_type {
             RctType::Null => Ok(Some(RctSigBase {
@@ -551,7 +562,7 @@ impl RctSigBase {
                 let txn_fee = Amount::from_pico(*txn_fee);
                 // RctType
                 if rct_type == RctType::Simple {
-                    pseudo_outs = decode_sized_vec!(inputs, r);
+                    pseudo_outs = consensus_decode_sized_vec(r, inputs)?;
                 }
                 // EcdhInfo
                 let mut ecdh_info: Vec<EcdhInfo> = vec![];
@@ -559,7 +570,7 @@ impl RctSigBase {
                     ecdh_info.push(EcdhInfo::consensus_decode(r, rct_type)?);
                 }
                 // OutPk
-                let out_pk: Vec<CtKey> = decode_sized_vec!(outputs, r);
+                let out_pk: Vec<CtKey> = consensus_decode_sized_vec(r, outputs)?;
                 Ok(Some(RctSigBase {
                     rct_type,
                     txn_fee,
@@ -599,8 +610,8 @@ impl crate::consensus::encode::Encodable for RctSigBase {
 }
 
 impl hash::Hashable for RctSigBase {
-    fn hash(&self) -> hash::Hash {
-        hash::Hash::new(serialize(self))
+    fn hash(&self) -> Result<hash::Hash, HashError> {
+        Ok(hash::Hash::new(serialize(self)?))
     }
 }
 
@@ -656,7 +667,7 @@ impl RctType {
 }
 
 impl Decodable for RctType {
-    fn consensus_decode<R: io::Read + ?Sized>(r: &mut R) -> Result<RctType, encode::Error> {
+    fn consensus_decode<R: io::Read + ?Sized>(r: &mut R) -> Result<RctType, encode::EncodeError> {
         let rct_type: u8 = Decodable::consensus_decode(r)?;
         match rct_type {
             0 => Ok(RctType::Null),
@@ -666,7 +677,7 @@ impl Decodable for RctType {
             4 => Ok(RctType::Bulletproof2),
             5 => Ok(RctType::Clsag),
             6 => Ok(RctType::BulletproofPlus),
-            _ => Err(Error::UnknownRctType.into()),
+            _ => Err(RingCtError::UnknownRctType.into()),
         }
     }
 }
@@ -717,7 +728,7 @@ impl RctSigPrunable {
         inputs: usize,
         outputs: usize,
         mixin: usize,
-    ) -> Result<Option<RctSigPrunable>, encode::Error> {
+    ) -> Result<Option<RctSigPrunable>, encode::EncodeError> {
         match rct_type {
             RctType::Null => Ok(None),
             RctType::Full
@@ -736,14 +747,14 @@ impl RctSigPrunable {
                         }
                         _ => {
                             let size: u32 = Decodable::consensus_decode(r)?;
-                            bulletproofs = decode_sized_vec!(size, r);
+                            bulletproofs = consensus_decode_sized_vec(r, size as usize)?;
                         }
                     }
                 } else if rct_type.is_rct_bp_plus() {
                     let size: u8 = Decodable::consensus_decode(r)?;
-                    bulletproofplus = decode_sized_vec!(size, r);
+                    bulletproofplus = consensus_decode_sized_vec(r, size as usize)?;
                 } else {
-                    range_sigs = decode_sized_vec!(outputs, r);
+                    range_sigs = consensus_decode_sized_vec(r, outputs)?;
                 }
 
                 let mut Clsags: Vec<Clsag> = vec![];
@@ -771,7 +782,8 @@ impl RctSigPrunable {
                             let mut ss: Vec<Vec<Key>> = vec![];
                             for _ in 0..=mixin {
                                 let mg_ss2_elements = if is_simple_or_bp { 2 } else { 1 + inputs };
-                                let ss_elems: Vec<Key> = decode_sized_vec!(mg_ss2_elements, r);
+                                let ss_elems: Vec<Key> =
+                                    consensus_decode_sized_vec(r, mg_ss2_elements)?;
                                 ss.push(ss_elems);
                             }
                             let cc = Decodable::consensus_decode(r)?;
@@ -786,7 +798,7 @@ impl RctSigPrunable {
                     | RctType::Bulletproof2
                     | RctType::Clsag
                     | RctType::BulletproofPlus => {
-                        pseudo_outs = decode_sized_vec!(inputs, r);
+                        pseudo_outs = consensus_decode_sized_vec(r, inputs)?;
                     }
                     _ => (),
                 }
