@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Use both transaction public keys when scanning outputs & reject non-canonical public keys in the tx-extra by [@Boog900](https://github.com/Boog900) ([#180](https://github.com/monero-rs/monero-rs/pull/180))
+- Error on non-minimal varint encoding and fix silent overflow [@stringhandler](https://github.com/stringhandler)([#174](https://github.com/monero-rs/monero-rs/pull/174))
+
+## [0.19.0] - 2023-09-15
+
 ### Changed
 
 - Exposed `serialize_hashable` on `Block` by [@Boog900](https://github.com/Boog900) ([#143](https://github.com/monero-rs/monero-rs/pull/143))
+- Update `base58-monero` to version `2` by [@h4sh3d](https://github.com/h4sh3d) ([#175](https://github.com/monero-rs/monero-rs/pull/175))
+- Bump MSRV to version `1.63.0` by [@h4sh3d](https://github.com/h4sh3d) ([#175](https://github.com/monero-rs/monero-rs/pull/175))
 
 ## [0.18.2] - 2023-01-02
 
@@ -293,7 +302,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Address and subaddress creation, de/serialization and validation
 - Private keys and one-time keys creation, de/serialization and validation
 
-[Unreleased]: https://github.com/monero-rs/monero-rs/compare/v0.18.2...HEAD
+[Unreleased]: https://github.com/monero-rs/monero-rs/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/monero-rs/monero-rs/compare/v0.18.2...v0.19.0
 [0.18.2]: https://github.com/monero-rs/monero-rs/compare/v0.18.1...v0.18.2
 [0.18.1]: https://github.com/monero-rs/monero-rs/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/monero-rs/monero-rs/compare/v0.17.2...v0.18.0
